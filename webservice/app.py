@@ -16,6 +16,7 @@ from botocore.exceptions import ClientError
 from pathlib import Path
 import datetime
 import io
+import csv
 
 # NOUVEAUX IMPORTS POUR LE TRAITEMENT DES DONNÉES
 import pandas as pd
@@ -126,80 +127,120 @@ def generate_s3_presigned_url(bucket_name: str, object_key: str, client_method: 
         logger.error(f"Unexpected error generating presigned URL for {object_key}: {e}", exc_info=True)
         return None
 
-# Dans app_files.py
-
 async def get_dataframe_from_s3(user: str, file_id: str) -> pd.DataFrame:
     """Télécharge un fichier depuis S3 et le charge dans un DataFrame pandas."""
     try:
-        # Récupérer les métadonnées du fichier depuis DynamoDB
-        db_response = files_table.get_item(Key={'user': user, 'id': file_id}) # Utiliser 'id' pour la clé DynamoDB
+        db_response = files_table.get_item(Key={'user': user, 'id': file_id})
         item = db_response.get('Item')
         if not item:
-            logger.warning(f"File metadata not found in DynamoDB for user '{user}', file_id (DynamoDB 'id') '{file_id}'.")
+            logger.warning(f"File metadata not found in DynamoDB for user '{user}', file_id '{file_id}'.")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File metadata not found.")
         
-        # Extraire les informations nécessaires de l'item DynamoDB
         s3_object_key = item.get('s3_object_key')
-        file_type_from_db = item.get('file_type', '').lower()  # Renommé pour éviter confusion avec un 'file_type' global
-        original_filename_from_db = item.get('original_filename', '').lower() # Renommé
+        file_type_from_db = item.get('file_type', '').lower()
+        original_filename_from_db = item.get('original_filename', '').lower()
 
         if not s3_object_key:
             logger.error(f"S3 object key missing in metadata for user '{user}', file_id '{file_id}'. Item: {item}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="S3 object key missing in metadata.")
 
-        logger.info(f"Fetching S3 object '{s3_object_key}' for user '{user}', file_id '{file_id}'. File type from DB: '{file_type_from_db}', Original filename from DB: '{original_filename_from_db}'")
+        logger.info(f"Fetching S3 object '{s3_object_key}' for user '{user}', file_id '{file_id}'. Type: '{file_type_from_db}', Filename: '{original_filename_from_db}'")
 
-        # Télécharger le fichier depuis S3
         s3_response = s3_client.get_object(Bucket=BUCKET_NAME, Key=s3_object_key)
-        file_content = s3_response['Body'].read()
+        file_content_bytes = s3_response['Body'].read() # Lire le contenu une seule fois en bytes
 
         df = None
-        # Utiliser les variables extraites de la base de données
-        if 'csv' in file_type_from_db or original_filename_from_db.endswith('.csv'):
-            logger.info(f"Attempting to read as CSV: {s3_object_key}")
-            try:
-                # Essayer d'abord avec le délimiteur ',' (par défaut)
-                df = pd.read_csv(io.BytesIO(file_content), header='infer')
-                # Heuristique pour vérifier si le délimiteur pourrait être ';'
-                first_line_content = file_content.splitlines(keepends=False)[0] if file_content else b''
-                if df.shape[1] <= 1 and b';' in first_line_content:
-                    logger.info(f"CSV for {s3_object_key} had 1 column with default delimiter, trying with ';'.")
-                    df = pd.read_csv(io.BytesIO(file_content), delimiter=';', header='infer')
-            except pd.errors.ParserError as pe:
-                logger.warning(f"Pandas ParserError with default delimiter for {s3_object_key}, trying with ';': {pe}")
-                try:
-                    df = pd.read_csv(io.BytesIO(file_content), delimiter=';', header='infer')
-                except Exception as e_delim:
-                    logger.error(f"Failed to parse CSV {s3_object_key} even with ';' delimiter: {e_delim}")
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Could not parse CSV file: {str(e_delim)}")
-            except Exception as e_csv:
-                logger.error(f"Unexpected error reading CSV {s3_object_key}: {e_csv}")
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error reading CSV file: {str(e_csv)}")
+        is_csv_type = 'csv' in file_type_from_db or original_filename_from_db.endswith('.csv')
+        is_excel_type = 'excel' in file_type_from_db or 'spreadsheetml' in file_type_from_db or \
+                        original_filename_from_db.endswith('.xlsx') or original_filename_from_db.endswith('.xls')
 
-        elif 'excel' in file_type_from_db or 'spreadsheetml' in file_type_from_db or \
-             original_filename_from_db.endswith('.xlsx') or original_filename_from_db.endswith('.xls'):
-            logger.info(f"Attempting to read as Excel: {s3_object_key}")
-            df = pd.read_excel(io.BytesIO(file_content))
+        if is_csv_type:
+            logger.info(f"Processing as CSV: {s3_object_key}")
+            # Tenter de décoder en string pour le sniffer et pour une première inspection
+            try:
+                file_content_str = file_content_bytes.decode('utf-8-sig') # Gère le BOM
+            except UnicodeDecodeError:
+                logger.warning(f"UTF-8-SIG decode failed for {s3_object_key}, trying with 'latin-1'")
+                try:
+                    file_content_str = file_content_bytes.decode('latin-1')
+                except UnicodeDecodeError as ude:
+                    logger.error(f"Could not decode CSV content for {s3_object_key}: {ude}")
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot decode CSV file content.")
+
+            detected_delimiter = ',' # Défaut
+            try:
+                # Utiliser le sniffer sur un échantillon du fichier
+                sample_for_sniffing = "\n".join(file_content_str.splitlines()[:20]) # Sniff sur les 20 premières lignes
+                dialect = csv.Sniffer().sniff(sample_for_sniffing)
+                detected_delimiter = dialect.delimiter
+                logger.info(f"CSV Sniffer detected delimiter: '{detected_delimiter}' for {s3_object_key}")
+            except csv.Error as sniff_error:
+                logger.warning(f"CSV Sniffer failed for {s3_object_key} ('{sniff_error}'). Checking for common delimiters.")
+                # Si le sniffer échoue, on peut essayer une heuristique simple
+                if file_content_str.splitlines()[0].count(';') > file_content_str.splitlines()[0].count(','):
+                    detected_delimiter = ';'
+                    logger.info(f"Sniffer failed, heuristic suggests delimiter: ';' for {s3_object_key}")
+                else:
+                    logger.info(f"Sniffer failed, heuristic suggests delimiter: ',' for {s3_object_key}")
+            
+            try:
+                # Lire le CSV avec le délimiteur détecté (ou le délimiteur par défaut)
+                # On utilise file_content_bytes car pandas peut gérer les bytes directement
+                df = pd.read_csv(io.BytesIO(file_content_bytes), delimiter=detected_delimiter, header='infer', skipinitialspace=True)
+                logger.info(f"Successfully parsed CSV with delimiter '{detected_delimiter}'. Columns: {df.columns.tolist()}")
+
+                # Vérification supplémentaire: si on a une seule colonne et que le nom contient des délimiteurs non utilisés
+                if df.shape[1] == 1:
+                    col_name = df.columns[0]
+                    if detected_delimiter == ',' and ';' in col_name:
+                        logger.warning(f"CSV parsed with ',' but found ';' in single column name. Trying with ';'. Column: {col_name}")
+                        df = pd.read_csv(io.BytesIO(file_content_bytes), delimiter=';', header='infer', skipinitialspace=True)
+                    elif detected_delimiter == ';' and ',' in col_name:
+                         logger.warning(f"CSV parsed with ';' but found ',' in single column name. Trying with ','. Column: {col_name}")
+                         df = pd.read_csv(io.BytesIO(file_content_bytes), delimiter=',', header='infer', skipinitialspace=True)
+                
+            except Exception as e_csv:
+                logger.error(f"Error parsing CSV {s3_object_key} with delimiter '{detected_delimiter}': {e_csv}", exc_info=True)
+                # Tenter un dernier fallback avec un délimiteur commun si l'erreur persiste
+                fallback_delimiter = ';' if detected_delimiter == ',' else ','
+                try:
+                    logger.info(f"Attempting fallback parse with delimiter '{fallback_delimiter}' for {s3_object_key}")
+                    df = pd.read_csv(io.BytesIO(file_content_bytes), delimiter=fallback_delimiter, header='infer', skipinitialspace=True)
+                    logger.info(f"Successfully parsed CSV with fallback delimiter '{fallback_delimiter}'. Columns: {df.columns.tolist()}")
+                except Exception as e_fallback:
+                    logger.error(f"Fallback parse also failed for {s3_object_key} with delimiter '{fallback_delimiter}': {e_fallback}", exc_info=True)
+                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Could not parse CSV file. Tried delimiters: '{detected_delimiter}', '{fallback_delimiter}'. Error: {str(e_csv)}")
+
+        elif is_excel_type:
+            logger.info(f"Processing as Excel: {s3_object_key}")
+            try:
+                df = pd.read_excel(io.BytesIO(file_content_bytes)) # Pandas gère les bytes pour Excel
+            except Exception as e_excel:
+                logger.error(f"Error parsing Excel file {s3_object_key}: {e_excel}", exc_info=True)
+                raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Could not parse Excel file: {str(e_excel)}")
         else:
-            logger.warning(f"Unsupported file type for processing for S3 object '{s3_object_key}'. Type from DB: '{file_type_from_db}', Filename: '{original_filename_from_db}'")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported file type for processing: '{file_type_from_db or original_filename_from_db}'")
+            logger.warning(f"Unsupported file type for S3 object '{s3_object_key}'. Type: '{file_type_from_db}', Filename: '{original_filename_from_db}'")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Unsupported file type: '{file_type_from_db or original_filename_from_db}'")
         
         if df is None or df.empty:
-            logger.warning(f"Parsed DataFrame is empty for S3 object '{s3_object_key}'. Check file content and delimiter.")
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Parsed DataFrame is empty. File might be empty or delimiter issue not resolved.")
+            logger.warning(f"Parsed DataFrame is empty for S3 object '{s3_object_key}'.")
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Parsed DataFrame is empty. File might be empty or delimiter/format issue.")
         
-        logger.info(f"DataFrame for S3 object '{s3_object_key}' loaded successfully. Columns: {df.columns.tolist()}")
+        logger.info(f"DataFrame for S3 object '{s3_object_key}' loaded. Final columns: {df.columns.tolist()}")
+        # Nettoyer les noms de colonnes (enlever les espaces superflus)
+        df.columns = df.columns.str.strip()
         return df
 
-    except ClientError as e_boto: # Erreurs spécifiques à Boto3 (S3 ou DynamoDB)
+    # ... (blocs except existants) ...
+    except ClientError as e_boto: 
         logger.error(f"AWS ClientError for file_id '{file_id}', user '{user}': {e_boto}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error accessing file data: {str(e_boto)}")
-    except pd.errors.EmptyDataError: # Fichier vide ou non parseable par pandas
-        logger.warning(f"Pandas EmptyDataError for file_id '{file_id}', user '{user}'. S3 object likely empty or completely unparseable.")
+    except pd.errors.EmptyDataError: 
+        logger.warning(f"Pandas EmptyDataError for file_id '{file_id}', user '{user}'. S3 object likely empty.")
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="The file is empty or unparseable by the backend.")
-    except HTTPException: # Re-lever les HTTPExceptions déjà levées
+    except HTTPException: 
         raise
-    except Exception as e_general: # Autres erreurs inattendues
+    except Exception as e_general: 
         logger.error(f"Unexpected error processing file_id '{file_id}' for user '{user}': {e_general}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not process file: {str(e_general)}")
 
