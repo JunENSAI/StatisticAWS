@@ -213,38 +213,44 @@ async def confirm_file_upload(
 
     timestamp = datetime.datetime.utcnow().isoformat()
     
+    # Étape 1: Vérifier si l'objet existe réellement sur S3
     try:
         s3_client.head_object(Bucket=BUCKET_NAME, Key=payload.s3_object_key)
     except ClientError as e:
         if e.response['Error']['Code'] == '404':
-            logger.error(f"S3 object not found for confirmation: {payload.s3_object_key}")
+            logger.error(f"S3 object not found for confirmation: {payload.s3_object_key} for user {user}, file_id {payload.file_id}")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Uploaded file not found on S3.")
-        logger.error(f"S3 ClientError checking object {payload.s3_object_key}: {e}", exc_info=True)
+        logger.error(f"S3 ClientError checking object {payload.s3_object_key} for user {user}, file_id {payload.file_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error verifying file on S3.")
 
+    # Étape 2: Préparer l'item pour DynamoDB
     item = {
-        'user': user, 
-        'file_id': payload.file_id, 
+        'user': user,                   # Clé de partition
+        'id': payload.file_id,          # Clé de tri (MODIFIÉE pour correspondre à la définition de la table)
         'original_filename': payload.original_filename,
         's3_object_key': payload.s3_object_key,
         'file_type': payload.file_type,
         'upload_timestamp': timestamp,
         'file_size': payload.file_size,
-        'status': 'uploaded',
-        'processingStatus': 'pending_lambda' # Statut initial avant que la lambda ne traite
+        'status': 'uploaded', # Statut après confirmation de l'upload S3
+        'processingStatus': 'pending_lambda' # Statut initial avant que la lambda ne traite les métadonnées du fichier
     }
+    
+    logger.debug(f"Item to be put in DynamoDB for user {user}, file_id {payload.file_id}: {item}")
 
+    # Étape 3: Écrire l'item dans DynamoDB
     try:
         files_table.put_item(Item=item)
-        logger.info(f"Confirmed upload and stored metadata for user {user}, file_id {payload.file_id}")
-        return FileMetadataResponse(**item)
+        logger.info(f"Successfully stored metadata in DynamoDB for user {user}, file_id {payload.file_id} (DynamoDB 'id': {item['id']})")
+        # Retourner une réponse basée sur l'item réellement inséré
+        return FileMetadataResponse(**item) 
     except ClientError as e:
-        logger.error(f"DynamoDB ClientError during put_item for file_id {payload.file_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Failed to record file metadata: {e.response['Error']['Message']}")
-    except Exception as e:
-        logger.error(f"Unexpected error during file metadata storage for {payload.file_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error during file metadata storage")
-
+        logger.error(f"DynamoDB ClientError during put_item for user {user}, file_id {payload.file_id} (DynamoDB 'id': {item['id']}): {e}", exc_info=True)
+        # Masquer les détails de l'erreur interne au client si nécessaire, mais le message de l'erreur est utile pour le débogage.
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to record file metadata in database: {e.response['Error']['Message']}")
+    except Exception as e: # Capturer d'autres exceptions potentielles
+        logger.error(f"Unexpected error during file metadata storage for user {user}, file_id {payload.file_id} (DynamoDB 'id': {item['id']}): {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected internal server error occurred while storing file metadata.")
 
 @app.get("/files", response_model=List[FileMetadataResponse])
 async def get_user_files(authorization: Union[str, None] = Header(default=None)):
