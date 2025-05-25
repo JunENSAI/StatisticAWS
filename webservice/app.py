@@ -37,7 +37,7 @@ app.add_middleware(
 
 # ... (Gestion des erreurs et configuration AWS existantes restent les mêmes) ...
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-DYNAMO_TABLE_FILES = os.getenv("FILES_DYNAMO_TABLE", "MyFilesTable")
+DYNAMO_TABLE_FILES = os.getenv("DYNAMO_TABLE", "MyFilesTable")
 BUCKET_NAME = os.getenv("BUCKET")
 
 my_config = Config(region_name=AWS_REGION)

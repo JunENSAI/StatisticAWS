@@ -1,4 +1,4 @@
-const API_BASE_URL = import.meta.env.VITE_APP_API_BASE_URL;
+const API_BASE_URL = 'http://localhost:8080';
 
 // Fonction pour récupérer le username (à adapter selon votre gestion d'auth)
 const getAuthHeader = () => {
