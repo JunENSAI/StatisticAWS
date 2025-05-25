@@ -35,22 +35,36 @@ else:
 
 
 def extract_csv_metadata(file_content_stream):
-    """Extrait les métadonnées d'un fichier CSV."""
     try:
-        # Décoder le contenu du flux, supposer UTF-8 par défaut, mais cela pourrait nécessiter une configuration
-        content = file_content_stream.read().decode('utf-8-sig') # utf-8-sig pour gérer le BOM
-        reader = csv.reader(io.StringIO(content))
+        content = file_content_stream.read().decode('utf-8-sig') # utf-8-sig gère le BOM
+        # Essayer de détecter le délimiteur ou supposer le point-virgule si c'est courant pour vos fichiers
+        # Option 1: Utiliser csv.Sniffer pour détecter le dialecte (plus robuste mais peut échouer)
+        try:
+            dialect = csv.Sniffer().sniff(content.splitlines()[0]) # Sniff sur la première ligne
+            logger.info(f"CSV dialect sniffed: delimiter='{dialect.delimiter}', quotechar='{dialect.quotechar}'")
+            reader = csv.reader(io.StringIO(content), dialect=dialect)
+        except csv.Error:
+            logger.warning("CSV Sniffer failed, falling back to ';' delimiter.")
+            # Option 2: Supposer le point-virgule si le sniff échoue ou si vous savez que c'est le cas
+            reader = csv.reader(io.StringIO(content), delimiter=';') 
+
         rows = list(reader)
         if not rows:
-            return None, 0, 0 # Pas d'en-têtes, 0 lignes, 0 colonnes
+            logger.warning("CSV file appears to be empty or unparseable with current delimiter.")
+            return None, 0, 0
         
         headers = rows[0]
-        num_rows = len(rows) -1 # Exclure la ligne d'en-tête du comptage des données
+        num_rows = len(rows) - 1
         num_cols = len(headers)
+        
+        logger.info(f"Extracted headers: {headers}, Num_cols: {num_cols}, Num_rows: {num_rows}")
+        if num_cols <= 1 and ';' in content.splitlines()[0]: # Si on a une seule colonne mais qu'il y a des ';' dans l'en-tête
+            logger.warning("Possible delimiter issue: Only one column detected but ';' present in header. Check delimiter.")
+
         return headers, num_rows, num_cols
     except Exception as e:
         logger.error(f"Error processing CSV content: {e}", exc_info=True)
-        raise # Re-lever pour que le handler principal puisse le traiter
+        raise
 
 
 def extract_excel_metadata(file_content_stream):
