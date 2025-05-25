@@ -224,32 +224,55 @@ async def confirm_file_upload(
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error verifying file on S3.")
 
     # Étape 2: Préparer l'item pour DynamoDB
-    item = {
-        'user': user,                   # Clé de partition
-        'id': payload.file_id,          # Clé de tri (MODIFIÉE pour correspondre à la définition de la table)
+    # Cet 'item' est ce qui est écrit en base de données.
+    # La clé de tri dans DynamoDB est 'id'.
+    item_for_db = {
+        'user': user,
+        'id': payload.file_id, # La valeur de payload.file_id (qui est notre UUID de fichier) est stockée sous la clé 'id'
         'original_filename': payload.original_filename,
         's3_object_key': payload.s3_object_key,
         'file_type': payload.file_type,
         'upload_timestamp': timestamp,
         'file_size': payload.file_size,
-        'status': 'uploaded', # Statut après confirmation de l'upload S3
-        'processingStatus': 'pending_lambda' # Statut initial avant que la lambda ne traite les métadonnées du fichier
+        'status': 'uploaded',
+        'processingStatus': 'pending_lambda'
     }
     
-    logger.debug(f"Item to be put in DynamoDB for user {user}, file_id {payload.file_id}: {item}")
+    logger.debug(f"Item to be put in DynamoDB for user {user}, file_id from payload {payload.file_id}: {item_for_db}")
 
     # Étape 3: Écrire l'item dans DynamoDB
     try:
-        files_table.put_item(Item=item)
-        logger.info(f"Successfully stored metadata in DynamoDB for user {user}, file_id {payload.file_id} (DynamoDB 'id': {item['id']})")
-        # Retourner une réponse basée sur l'item réellement inséré
-        return FileMetadataResponse(**item) 
+        files_table.put_item(Item=item_for_db)
+        logger.info(f"Successfully stored metadata in DynamoDB for user {user}, file_id from payload {payload.file_id} (DynamoDB 'id': {item_for_db['id']})")
+        
+        # Étape 4: Préparer les données pour la réponse au client.
+        # Le modèle Pydantic FileMetadataResponse attend un champ 'file_id'.
+        # Nous mappons 'id' de item_for_db (qui est la valeur de payload.file_id) vers 'file_id'.
+        response_data = {
+            'user': item_for_db['user'],
+            'file_id': item_for_db['id'], # Mappage de la clé 'id' de la DB vers 'file_id' pour la réponse
+            'original_filename': item_for_db['original_filename'],
+            's3_object_key': item_for_db['s3_object_key'],
+            'file_type': item_for_db['file_type'],
+            'upload_timestamp': item_for_db['upload_timestamp'],
+            'file_size': item_for_db.get('file_size'), # Utiliser .get() pour les champs potentiellement optionnels
+            'status': item_for_db.get('status', 'uploaded'),
+            # Ces champs sont optionnels et peuvent ne pas être dans item_for_db immédiatement
+            # La Lambda les ajoutera plus tard. FileMetadataResponse les gère comme Optional.
+            'columnHeaders': item_for_db.get('columnHeaders'), 
+            'rowCount': item_for_db.get('rowCount'),
+            'columnCount': item_for_db.get('columnCount'),
+            'processingStatus': item_for_db.get('processingStatus'),
+            'processedTimestamp': item_for_db.get('processedTimestamp')
+        }
+        
+        return FileMetadataResponse(**response_data)
+
     except ClientError as e:
-        logger.error(f"DynamoDB ClientError during put_item for user {user}, file_id {payload.file_id} (DynamoDB 'id': {item['id']}): {e}", exc_info=True)
-        # Masquer les détails de l'erreur interne au client si nécessaire, mais le message de l'erreur est utile pour le débogage.
+        logger.error(f"DynamoDB ClientError during put_item for user {user}, file_id from payload {payload.file_id} (DynamoDB 'id': {item_for_db['id']}): {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to record file metadata in database: {e.response['Error']['Message']}")
-    except Exception as e: # Capturer d'autres exceptions potentielles
-        logger.error(f"Unexpected error during file metadata storage for user {user}, file_id {payload.file_id} (DynamoDB 'id': {item['id']}): {e}", exc_info=True)
+    except Exception as e:
+        logger.error(f"Unexpected error during file metadata storage for user {user}, file_id from payload {payload.file_id} (DynamoDB 'id': {item_for_db['id']}): {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected internal server error occurred while storing file metadata.")
 
 @app.get("/files", response_model=List[FileMetadataResponse])
