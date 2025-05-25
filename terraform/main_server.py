@@ -15,7 +15,7 @@ from cdktf_cdktf_provider_aws.data_aws_caller_identity import DataAwsCallerIdent
 import base64
 
 # Mettez ici le nom du bucket S3 crée dans la partie serverless
-bucket="my-cdtf-test-bucket20250504143255658800000001"
+bucket="my-cdtf-test-bucket20250525112611500900000001"
 
 # Mettez ici le nom de la table dynamoDB créée dans la partie serverless
 dynamo_table="MyDynamoDB"
