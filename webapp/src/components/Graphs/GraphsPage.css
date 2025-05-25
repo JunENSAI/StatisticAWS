@@ -54,9 +54,12 @@
 }
 
 .chart-container {
-  position: relative; /* Nécessaire pour Chart.js pour la responsivité */
-  height: 400px; /* Donnez une hauteur explicite */
-  width: 100%;   /* Prenez toute la largeur disponible */
+  position: relative;
+  height: 400px;
+  width: 100%; 
+  max-width: 800px; /* Ajoutez une largeur maximale, ajustez selon vos besoins */
+  margin-left: auto;  /* Pour centrer si max-width est atteint */
+  margin-right: auto; /* Pour centrer si max-width est atteint */
   margin-top: 20px;
   padding: 10px;
   background-color: #fff;
