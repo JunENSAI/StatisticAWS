@@ -283,16 +283,53 @@ async def get_user_files(authorization: Union[str, None] = Header(default=None))
 
     logger.info(f"Fetching files for user: '{user}'")
     try:
-        response = files_table.query(KeyConditionExpression=Key('user').eq(user))
-        items = response.get('Items', [])
-        sorted_items = sorted(items, key=lambda x: x.get('upload_timestamp', ''), reverse=True)
-        return [FileMetadataResponse(**item) for item in sorted_items]
+        response = files_table.query(
+            KeyConditionExpression=Key('user').eq(user)
+        )
+        items_from_db = response.get('Items', [])
+        # Tri par date de téléversement, du plus récent au plus ancien
+        sorted_items_from_db = sorted(items_from_db, key=lambda x: x.get('upload_timestamp', ''), reverse=True)
+        
+        logger.debug(f"Items retrieved from DynamoDB for user {user}: {sorted_items_from_db[:2]}") # Log les 2 premiers items pour inspection
+
+        # Mapper les items de la base de données pour qu'ils correspondent au modèle Pydantic FileMetadataResponse
+        response_items = []
+        for item_db in sorted_items_from_db:
+            # L'item_db a 'id' comme clé de tri (identifiant unique du fichier)
+            # Le modèle FileMetadataResponse attend 'file_id'
+            data_for_response_model = {
+                'user': item_db.get('user'),
+                'file_id': item_db.get('id'),  # <--- MAPPAGE CRUCIAL ICI
+                'original_filename': item_db.get('original_filename'),
+                's3_object_key': item_db.get('s3_object_key'),
+                'file_type': item_db.get('file_type'),
+                'upload_timestamp': item_db.get('upload_timestamp'),
+                'file_size': item_db.get('file_size'), # Pydantic gère Decimal vers int/float si nécessaire ou vous pouvez caster
+                'status': item_db.get('status'),
+                'columnHeaders': item_db.get('columnHeaders'),
+                'rowCount': item_db.get('rowCount'),
+                'columnCount': item_db.get('columnCount'),
+                'processingStatus': item_db.get('processingStatus'),
+                'processedTimestamp': item_db.get('processedTimestamp')
+            }
+            # Filtrer les clés None au cas où Pydantic ne les gère pas bien pour les champs non optionnels
+            # ou si les champs optionnels ne doivent pas être présents du tout s'ils sont None.
+            # Pour les champs optionnels, .get() retournant None est géré par Pydantic.
+            response_items.append(FileMetadataResponse(**data_for_response_model))
+            
+        logger.info(f"DynamoDB Query returned {len(response_items)} files for user {user}.")
+        return response_items
+
     except ClientError as e:
         logger.error(f"DynamoDB ClientError fetching files for user {user}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Database error: {e.response['Error']['Message']}")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {e.response['Error']['Message']}")
+    except pydantic_core._pydantic_core.ValidationError as e: # Capturer spécifiquement l'erreur Pydantic
+        logger.error(f"Pydantic ValidationError fetching files for user {user}: {e}", exc_info=True)
+        # Vous pourriez vouloir inspecter l'item qui a causé l'erreur ici
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Data validation error: {str(e)}")
     except Exception as e:
         logger.error(f"!!! UNEXPECTED EXCEPTION fetching files for user {user}: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail="Internal server error during file retrieval")
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Internal server error during file retrieval")
 
 
 @app.get("/files/{file_id}/download-url", response_model=FileDownloadUrlResponse)
