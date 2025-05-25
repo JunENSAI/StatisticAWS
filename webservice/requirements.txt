@@ -1,0 +1,6 @@
+fastapi[all]
+boto3
+python-dotenv
+pandas
+openpyxl
+scipy 
