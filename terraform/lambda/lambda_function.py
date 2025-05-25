@@ -7,12 +7,7 @@ import logging
 import csv
 import io
 import datetime
-
-# openpyxl devra être inclus dans le package de déploiement de la Lambda
-try:
-    import openpyxl
-except ImportError:
-    openpyxl = None # Gérer le cas où il n'est pas disponible, bien que ce soit une dépendance clé
+import openpyxl
 
 
 logger = logging.getLogger()
@@ -20,10 +15,9 @@ logger.setLevel("INFO")
 
 s3_client = boto3.client('s3')
 dynamodb_resource = None
-files_table = None # Renommé pour correspondre à notre cas d'usage
+files_table = None
 
-# Utiliser la variable d'environnement pour la table des fichiers
-FILES_DYNAMO_TABLE_NAME = os.getenv("DYNAMO_TABLE", "MyFilesTable") # Correspond à ce qui est dans app_files.py
+FILES_DYNAMO_TABLE_NAME = os.getenv("DYNAMO_TABLE") 
 
 if FILES_DYNAMO_TABLE_NAME:
     try:
@@ -38,16 +32,13 @@ else:
 
 def extract_csv_metadata(file_content_stream):
     try:
-        content = file_content_stream.read().decode('utf-8-sig') # utf-8-sig gère le BOM
-        # Essayer de détecter le délimiteur ou supposer le point-virgule si c'est courant pour vos fichiers
-        # Option 1: Utiliser csv.Sniffer pour détecter le dialecte (plus robuste mais peut échouer)
+        content = file_content_stream.read().decode('utf-8-sig')
         try:
-            dialect = csv.Sniffer().sniff(content.splitlines()[0]) # Sniff sur la première ligne
+            dialect = csv.Sniffer().sniff(content.splitlines()[0])
             logger.info(f"CSV dialect sniffed: delimiter='{dialect.delimiter}', quotechar='{dialect.quotechar}'")
             reader = csv.reader(io.StringIO(content), dialect=dialect)
         except csv.Error:
             logger.warning("CSV Sniffer failed, falling back to ';' delimiter.")
-            # Option 2: Supposer le point-virgule si le sniff échoue ou si vous savez que c'est le cas
             reader = csv.reader(io.StringIO(content), delimiter=';') 
 
         rows = list(reader)
@@ -75,23 +66,22 @@ def extract_excel_metadata(file_content_stream):
         logger.error("openpyxl library is not available. Cannot process Excel files.")
         raise ImportError("openpyxl library not found")
     try:
-        workbook = openpyxl.load_workbook(filename=file_content_stream) # Pas besoin de io.BytesIO si openpyxl > 2.5
-        sheet = workbook.active # Prendre la première feuille active
+        workbook = openpyxl.load_workbook(filename=file_content_stream)
+        sheet = workbook.active 
         
-        if sheet.max_row == 0: # Feuille vide
+        if sheet.max_row == 0: 
              return None, 0, 0
 
-        headers = [cell.value for cell in sheet[1]] # Première ligne pour les en-têtes
-        num_rows = sheet.max_row - 1 # Exclure la ligne d'en-tête
+        headers = [cell.value for cell in sheet[1]]
+        num_rows = sheet.max_row - 1 
         num_cols = sheet.max_column
 
-        # S'assurer que les en-têtes vides à la fin sont retirés si num_cols est basé sur la cellule la plus à droite
         actual_headers = [h for h in headers if h is not None]
-        if len(actual_headers) < num_cols and headers: # si il y a des headers mais moins que max_cols
+        if len(actual_headers) < num_cols and headers:
              if all(h is None for h in headers[len(actual_headers):]):
                  num_cols = len(actual_headers)
                  headers = actual_headers
-        elif not headers and num_cols > 0: # Pas de headers mais des colonnes ?
+        elif not headers and num_cols > 0: 
             headers = [f"Column_{i+1}" for i in range(num_cols)]
 
 
@@ -119,11 +109,8 @@ def lambda_handler(event, context):
                 logger.warning(f"Skipping record due to missing bucket name or object key: {record}")
                 continue
 
-            # Décoder la clé de l'objet (peut contenir des caractères spéciaux comme '+')
             key = unquote_plus(object_key)
             logger.info(f"Processing object s3://{bucket_name}/{key}")
-
-            # Structure de clé attendue : user_uploads/{user}/{file_id}/{s3_filename}
             parts = key.split('/')
             if len(parts) < 4 or parts[0] != "user_uploads":
                 logger.error(f"Invalid key format: '{key}'. Expected 'user_uploads/user/file_id/filename'. Skipping.")

@@ -17,10 +17,8 @@ from pathlib import Path
 import datetime
 import io
 import csv
-
-# NOUVEAUX IMPORTS POUR LE TRAITEMENT DES DONNÉES
 import pandas as pd
-from scipy import stats as scipy_stats # Pour les quartiles et autres
+from scipy import stats as scipy_stats
 
 
 load_dotenv()
@@ -30,15 +28,14 @@ logger = logging.getLogger("uvicorn")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # En production, spécifiez vos domaines React
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# ... (Gestion des erreurs et configuration AWS existantes restent les mêmes) ...
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-DYNAMO_TABLE_FILES = os.getenv("DYNAMO_TABLE", "MyFilesTable")
+DYNAMO_TABLE_FILES = os.getenv("DYNAMO_TABLE")
 BUCKET_NAME = os.getenv("BUCKET")
 
 my_config = Config(region_name=AWS_REGION)
@@ -47,7 +44,6 @@ files_table = dynamodb_resource.Table(DYNAMO_TABLE_FILES)
 s3_client = boto3.client('s3', config=Config(signature_version='s3v4', region_name=AWS_REGION))
 
 
-# --- Pydantic Models (les modèles existants restent) ---
 class FileInitiateUploadRequest(BaseModel):
     filename: str = Field(..., examples=["mydata.csv"])
     filetype: str = Field(..., examples=["text/csv"])
@@ -73,7 +69,6 @@ class FileMetadataResponse(BaseModel):
     upload_timestamp: str
     file_size: Union[int, None] = None
     status: str = "uploaded"
-    # Ajout des champs que la Lambda pourrait remplir
     columnHeaders: Optional[List[str]] = None
     rowCount: Optional[int] = None
     columnCount: Optional[int] = None
@@ -112,7 +107,6 @@ class BoxplotDataResponse(BaseModel):
     outliers: List[float] = [] # Optionnel, si on les calcule
 
 
-# --- Helper Functions (generate_s3_presigned_url reste) ---
 def generate_s3_presigned_url(bucket_name: str, object_key: str, client_method: str = 'put_object', expires_in: int = 3600, content_type: Union[str, None] = None):
     params = {'Bucket': bucket_name, 'Key': object_key}
     if content_type and client_method == 'put_object':
@@ -227,11 +221,9 @@ async def get_dataframe_from_s3(user: str, file_id: str) -> pd.DataFrame:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Parsed DataFrame is empty. File might be empty or delimiter/format issue.")
         
         logger.info(f"DataFrame for S3 object '{s3_object_key}' loaded. Final columns: {df.columns.tolist()}")
-        # Nettoyer les noms de colonnes (enlever les espaces superflus)
         df.columns = df.columns.str.strip()
         return df
 
-    # ... (blocs except existants) ...
     except ClientError as e_boto: 
         logger.error(f"AWS ClientError for file_id '{file_id}', user '{user}': {e_boto}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error accessing file data: {str(e_boto)}")
@@ -245,13 +237,6 @@ async def get_dataframe_from_s3(user: str, file_id: str) -> pd.DataFrame:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not process file: {str(e_general)}")
 
 
-# --- API Endpoints (les endpoints existants restent) ---
-# POST /files/initiate-upload
-# POST /files/confirm-upload
-# GET /files
-# GET /files/{file_id}/download-url (toujours utile si le client veut le fichier brut)
-# DELETE /files/{file_id}
-# ... (leur code reste le même qu'avant) ...
 
 @app.post("/files/initiate-upload", response_model=FileInitiateUploadResponse, status_code=status.HTTP_200_OK)
 async def initiate_file_upload(
@@ -304,12 +289,9 @@ async def confirm_file_upload(
         logger.error(f"S3 ClientError checking object {payload.s3_object_key} for user {user}, file_id {payload.file_id}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error verifying file on S3.")
 
-    # Étape 2: Préparer l'item pour DynamoDB
-    # Cet 'item' est ce qui est écrit en base de données.
-    # La clé de tri dans DynamoDB est 'id'.
     item_for_db = {
         'user': user,
-        'id': payload.file_id, # La valeur de payload.file_id (qui est notre UUID de fichier) est stockée sous la clé 'id'
+        'id': payload.file_id,
         'original_filename': payload.original_filename,
         's3_object_key': payload.s3_object_key,
         'file_type': payload.file_type,
@@ -321,14 +303,10 @@ async def confirm_file_upload(
     
     logger.debug(f"Item to be put in DynamoDB for user {user}, file_id from payload {payload.file_id}: {item_for_db}")
 
-    # Étape 3: Écrire l'item dans DynamoDB
     try:
         files_table.put_item(Item=item_for_db)
         logger.info(f"Successfully stored metadata in DynamoDB for user {user}, file_id from payload {payload.file_id} (DynamoDB 'id': {item_for_db['id']})")
         
-        # Étape 4: Préparer les données pour la réponse au client.
-        # Le modèle Pydantic FileMetadataResponse attend un champ 'file_id'.
-        # Nous mappons 'id' de item_for_db (qui est la valeur de payload.file_id) vers 'file_id'.
         response_data = {
             'user': item_for_db['user'],
             'file_id': item_for_db['id'], # Mappage de la clé 'id' de la DB vers 'file_id' pour la réponse
@@ -336,10 +314,8 @@ async def confirm_file_upload(
             's3_object_key': item_for_db['s3_object_key'],
             'file_type': item_for_db['file_type'],
             'upload_timestamp': item_for_db['upload_timestamp'],
-            'file_size': item_for_db.get('file_size'), # Utiliser .get() pour les champs potentiellement optionnels
+            'file_size': item_for_db.get('file_size'),
             'status': item_for_db.get('status', 'uploaded'),
-            # Ces champs sont optionnels et peuvent ne pas être dans item_for_db immédiatement
-            # La Lambda les ajoutera plus tard. FileMetadataResponse les gère comme Optional.
             'columnHeaders': item_for_db.get('columnHeaders'), 
             'rowCount': item_for_db.get('rowCount'),
             'columnCount': item_for_db.get('columnCount'),
@@ -368,16 +344,12 @@ async def get_user_files(authorization: Union[str, None] = Header(default=None))
             KeyConditionExpression=Key('user').eq(user)
         )
         items_from_db = response.get('Items', [])
-        # Tri par date de téléversement, du plus récent au plus ancien
         sorted_items_from_db = sorted(items_from_db, key=lambda x: x.get('upload_timestamp', ''), reverse=True)
         
-        logger.debug(f"Items retrieved from DynamoDB for user {user}: {sorted_items_from_db[:2]}") # Log les 2 premiers items pour inspection
-
-        # Mapper les items de la base de données pour qu'ils correspondent au modèle Pydantic FileMetadataResponse
+        logger.debug(f"Items retrieved from DynamoDB for user {user}: {sorted_items_from_db[:2]}") 
         response_items = []
         for item_db in sorted_items_from_db:
-            # L'item_db a 'id' comme clé de tri (identifiant unique du fichier)
-            # Le modèle FileMetadataResponse attend 'file_id'
+
             data_for_response_model = {
                 'user': item_db.get('user'),
                 'file_id': item_db.get('id'),  # <--- MAPPAGE CRUCIAL ICI
@@ -393,9 +365,7 @@ async def get_user_files(authorization: Union[str, None] = Header(default=None))
                 'processingStatus': item_db.get('processingStatus'),
                 'processedTimestamp': item_db.get('processedTimestamp')
             }
-            # Filtrer les clés None au cas où Pydantic ne les gère pas bien pour les champs non optionnels
-            # ou si les champs optionnels ne doivent pas être présents du tout s'ils sont None.
-            # Pour les champs optionnels, .get() retournant None est géré par Pydantic.
+
             response_items.append(FileMetadataResponse(**data_for_response_model))
             
         logger.info(f"DynamoDB Query returned {len(response_items)} files for user {user}.")
@@ -404,9 +374,8 @@ async def get_user_files(authorization: Union[str, None] = Header(default=None))
     except ClientError as e:
         logger.error(f"DynamoDB ClientError fetching files for user {user}: {e}", exc_info=True)
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Database error: {e.response['Error']['Message']}")
-    except pydantic_core._pydantic_core.ValidationError as e: # Capturer spécifiquement l'erreur Pydantic
+    except pydantic_core._pydantic_core.ValidationError as e:
         logger.error(f"Pydantic ValidationError fetching files for user {user}: {e}", exc_info=True)
-        # Vous pourriez vouloir inspecter l'item qui a causé l'erreur ici
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Data validation error: {str(e)}")
     except Exception as e:
         logger.error(f"!!! UNEXPECTED EXCEPTION fetching files for user {user}: {e}", exc_info=True)
@@ -441,31 +410,7 @@ async def get_file_download_url_endpoint( # Renommé pour éviter conflit avec l
     except Exception as e:
         raise HTTPException(status_code=500, detail="Internal server error")
 
-@app.delete("/files/{file_id}", status_code=status.HTTP_200_OK)
-async def delete_file(file_id: str, authorization: Union[str, None] = Header(default=None)):
-    user = authorization
-    if not user: raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not authenticated")
-    # ... (code de suppression existant)
-    try:
-        get_response = files_table.get_item(Key={'user': user, 'file_id': file_id})
-        item_to_delete = get_response.get('Item')
-        if not item_to_delete:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
-        s3_object_key = item_to_delete.get('s3_object_key')
-        if s3_object_key and BUCKET_NAME:
-            try:
-                s3_client.delete_object(Bucket=BUCKET_NAME, Key=s3_object_key)
-            except ClientError as e: logger.error(f"S3 Error deleting {s3_object_key}: {e}") # Non bloquant
-        delete_response = files_table.delete_item(Key={'user': user, 'file_id': file_id}, ReturnValues='ALL_OLD')
-        if not delete_response.get('Attributes'):
-             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File was already deleted or not found during final delete.")
-        return {"message": "File deleted successfully", "deleted_file": FileMetadataResponse(**delete_response.get('Attributes'))}
-    except ClientError as e: raise HTTPException(status_code=500, detail=f"DB error: {e.response['Error']['Message']}")
-    except HTTPException: raise
-    except Exception as e: raise HTTPException(status_code=500, detail="Server error during deletion")
 
-
-# --- NOUVEAUX ENDPOINTS POUR STATISTIQUES ET GRAPHIQUES ---
 
 @app.get("/files/{file_id}/statistics/{variable_name}", response_model=DescriptiveStatsResponse)
 async def get_file_statistics(
@@ -556,10 +501,6 @@ async def get_boxplot_data(
     upper_bound = q3 + 1.5 * iqr
     
     outliers = column_data[(column_data < lower_bound) | (column_data > upper_bound)].tolist()
-    # Pour le graphique boxplot de Chart.js, on donne souvent min, q1, median, q3, max
-    # et la bibliothèque calcule les moustaches (whiskers) jusqu'aux données non-outliers.
-    # Ici, on renvoie les valeurs calculées. Le plugin boxplot peut aussi prendre les données brutes.
-    # Pour la simplicité, nous renvoyons les statistiques calculées pour que le frontend n'ait qu'à les afficher.
 
     return BoxplotDataResponse(
         variable_name=variable_name,

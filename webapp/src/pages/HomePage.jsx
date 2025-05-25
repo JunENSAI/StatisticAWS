@@ -6,8 +6,8 @@ import Navbar from '../components/Layout/Navbar';
 import './HomePage.css';
 
 function HomePage({ username, onLogout }) {
-  const [activeTab, setActiveTab] = useState('upload'); // 'upload', 'stats', 'graphs'
-  const [uploadedFiles, setUploadedFiles] = useState([]); // Pour stocker les infos des fichiers
+  const [activeTab, setActiveTab] = useState('upload'); 
+  const [uploadedFiles, setUploadedFiles] = useState([]);
 
   // Cette fonction sera appelée par FileUploadPage après un dépôt "réussi"
   const handleFileUploaded = (fileInfo) => {

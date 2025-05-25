@@ -14,7 +14,7 @@
 .upload-form {
   display: flex;
   align-items: center;
-  gap: 10px; /* Espace entre l'input et le bouton */
+  gap: 10px;
   margin-bottom: 1rem;
 }
 
@@ -22,7 +22,7 @@
   padding: 8px;
   border: 1px solid #ddd;
   border-radius: 4px;
-  flex-grow: 1; /* L'input prend plus de place */
+  flex-grow: 1;
 }
 
 .upload-form button {

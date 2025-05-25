@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import './DescriptiveStatsPage.css';
-// Importez les nouvelles fonctions API
 import { getUserFiles, fetchFileStatistics } from '../../services/apiService';
 
 function DescriptiveStatsPage() {
   const [userFiles, setUserFiles] = useState([]);
   const [selectedFileId, setSelectedFileId] = useState('');
-  const [fileMetadata, setFileMetadata] = useState(null); // Pour stocker les métadonnées du fichier sélectionné, y compris les en-têtes
+  const [fileMetadata, setFileMetadata] = useState(null);
   const [headers, setHeaders] = useState([]);
   const [selectedVariableForStats, setSelectedVariableForStats] = useState('');
   const [descriptiveStats, setDescriptiveStats] = useState(null);
@@ -23,8 +22,7 @@ function DescriptiveStatsPage() {
         setUserFiles(files.map(f => ({
           id: f.file_id,
           name: f.original_filename,
-          // Stocker les en-têtes si la Lambda les a fournis
-          columnHeaders: f.columnHeaders || [], 
+          columnHeaders: f.columnHeaders || [], //stocke les entêtes de la table deposée.
         })));
       } catch (err) {
         setError(err.message || 'Erreur lors de la récupération des fichiers.');
@@ -74,7 +72,6 @@ function DescriptiveStatsPage() {
   };
 
   if (isLoadingFiles) return <p>Chargement des fichiers...</p>;
-  // if (error && userFiles.length === 0) return <p style={{color: 'red'}}>{error}</p>; // Erreur initiale
   if (!isLoadingFiles && userFiles.length === 0 && !error) return <p>Aucun fichier déposé.</p>;
 
 

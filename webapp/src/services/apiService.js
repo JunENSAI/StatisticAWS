@@ -1,6 +1,5 @@
-const API_BASE_URL = 'http://localhost:8080';
+const API_BASE_URL = 'http://localhost:8080'; //pourrait être aussi le dns du load balancer (portail vers l'api).
 
-// Fonction pour récupérer le username (à adapter selon votre gestion d'auth)
 const getAuthHeader = () => {
   const username = localStorage.getItem('username');
   if (username) {
@@ -76,7 +75,6 @@ export const deleteFileApi = async (fileId) => {
   return response.json();
 };
 
-// --- Fonctions pour obtenir un fichier brut (si nécessaire) ---
 
 /**
  * Récupère l'URL de téléchargement pré-signée pour un fichier.

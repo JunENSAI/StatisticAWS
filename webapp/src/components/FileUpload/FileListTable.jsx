@@ -1,14 +1,13 @@
 import React from 'react';
 import './FileListTable.css';
 
+
+// function qui se charge de montrer la liste des tables pour un utilisateur donné. On y verra les information : ID base, date de dépot, statut
 function FileListTable({ files }) {
   if (!files || files.length === 0) {
     return <p>Aucune base de données déposée pour le moment.</p>;
   }
 
-  // On prend les N dernières bases pour l'affichage, par exemple les 5 dernières.
-  // Ou on les organise en colonnes si le style le permet.
-  // Pour un affichage simple en "colonnes" (plutôt des cartes côte à côte):
   return (
     <div className="file-list-container">
       <h4>Mes Bases de Données Déposées</h4>

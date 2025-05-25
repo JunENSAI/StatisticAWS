@@ -62,8 +62,8 @@ class ServerlessStack(TerraformStack):
 
         code = TerraformAsset(
             self, "code",
-            path="./lambda_pack.zip",
-            type=AssetType.FILE
+            path="./lambda",
+            type=AssetType.ARCHIVE
         )
 
         lambda_function = LambdaFunction(

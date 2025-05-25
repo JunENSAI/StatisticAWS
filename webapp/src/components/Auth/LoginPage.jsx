@@ -8,7 +8,6 @@ function LoginPage({ onLogin }) {
   const handleSubmit = (e) => {
     e.preventDefault();
     if (username && password) {
-      // Simulation de la validation. Dans une vraie app, appelez un backend.
       localStorage.setItem('username', username); // Stocker le username
       onLogin(username);
     } else {

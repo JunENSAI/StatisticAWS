@@ -4,7 +4,7 @@ import './Navbar.css';
 function Navbar({ username, onLogout, setActiveTab, activeTab }) {
   return (
     <nav className="navbar">
-      <div className="navbar-brand">Mon Application</div>
+      <div className="navbar-brand">Simple Stat</div>
       <div className="navbar-tabs">
         <button
           className={`nav-button ${activeTab === 'upload' ? 'active' : ''}`}
