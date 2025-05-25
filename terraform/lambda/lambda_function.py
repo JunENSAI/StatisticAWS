@@ -204,13 +204,13 @@ def lambda_handler(event, context):
                 update_response = files_table.update_item(
                     Key={
                         'user': user,
-                        'file_id': file_id # Notre clé de tri pour la table des fichiers
+                        'id': file_id # Notre clé de tri pour la table des fichiers
                     },
                     UpdateExpression=update_expression,
                     ExpressionAttributeValues=expression_attribute_values,
                     ReturnValues="UPDATED_NEW"
                 )
-                logger.info(f"DynamoDB update successful for file '{file_id}'. Updated attributes: {update_response.get('Attributes')}")
+                logger.info(f"DynamoDB update successful for file (identified by id='{file_id}'). Updated attributes: {update_response.get('Attributes')}")
 
             except ClientError as e:
                 if e.response['Error']['Code'] == 'ConditionalCheckFailedException': # Ne devrait pas arriver sans ConditionExpression
