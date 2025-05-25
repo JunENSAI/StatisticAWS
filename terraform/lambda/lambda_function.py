@@ -6,6 +6,8 @@ import os
 import logging
 import csv
 import io
+import datetime
+
 # openpyxl devra être inclus dans le package de déploiement de la Lambda
 try:
     import openpyxl
